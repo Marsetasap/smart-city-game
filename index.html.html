@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart City: Light Up the Night</title>
+    <style>
+        :root {
+            --bg-color: #020617;
+            --panel-color: #1e293b;
+            --accent-yellow: #f1c40f;
+            --accent-green: #2ecc71;
+            --accent-red: #e74c3c;
+            --text-white: #f8fafc;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: var(--bg-color);
+            color: var(--text-white);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 950px;
+            padding: 15px;
+            background: var(--panel-color);
+            border-radius: 12px 12px 0 0;
+            margin-top: 15px;
+        }
+
+        .stat-box {
+            background: rgba(0,0,0,0.3);
+            padding: 8px 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value { font-size: 24px; font-weight: bold; color: var(--accent-yellow); }
+
+        canvas {
+            background: #020617;
+            border: 4px solid var(--panel-color);
+            cursor: crosshair;
+        }
+
+        .ui-panel {
+            background: var(--panel-color);
+            padding: 15px;
+            border-radius: 0 0 12px 12px;
+            display: flex;
+            gap: 15px;
+            width: 950px;
+            justify-content: center;
+            box-sizing: border-box;
+        }
+
+        #message {
+            position: absolute;
+            bottom: 85px;
+            font-weight: bold;
+            font-size: 18px;
+            text-shadow: 2px 2px 4px #000;
+        }
+
+        button {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            text-transform: uppercase;
+        }
+
+        .btn-submit { background: var(--accent-green); }
+        .btn-reset { background: var(--accent-red); }
+        button:disabled { background: #475569; }
+    </style>
+</head>
+<body>
+
+<div class="game-header">
+    <div>
+        <h2 style="margin:0; color: var(--accent-yellow);">THÀNH PHỐ LÊN ĐÈN</h2>
+        <p style="margin:5px 0 0 0; font-size:13px; color:#94a3b8">Kết nối lưới điện để thắp sáng các khu cư dân.</p>
+    </div>
+    <div style="display:flex; gap:15px">
+        <div class="stat-box">
+            <span style="font-size:10px; display:block">THỜI GIAN</span>
+            <span id="timer" class="stat-value">60</span>
+        </div>
+        <div class="stat-box">
+            <span style="font-size:10px; display:block">CHI PHÍ HIỆN TẠI</span>
+            <span id="currentWeight" class="stat-value">0</span>
+        </div>
+    </div>
+</div>
+
+<canvas id="cityCanvas" width="950" height="480"></canvas>
+<div id="message"></div>
+
+<div class="ui-panel">
+    <button class="btn-submit" id="submitBtn" onclick="submitGame()" disabled>Kiểm Tra & Phân Tích</button>
+    <button class="btn-reset" onclick="initGame()">Tạo Bản Đồ Mới</button>
+</div>
+
+<script>
+const canvas = document.getElementById('cityCanvas');
+const ctx = canvas.getContext('2d');
+const GRID_SIZE = 50;
+
+let stations = [], playerEdges = [], mstEdges = [];
+let timeLeft = 60, gameActive = false, timerInterval;
+let selectedStation = null;
+let minPossibleWeight = 0;
+
+class DSU {
+    constructor(n) { this.parent = Array.from({length: n}, (_, i) => i); this.count = n; }
+    find(i) {
+        if (this.parent[i] === i) return i;
+        return this.parent[i] = this.find(this.parent[i]);
+    }
+    union(i, j) {
+        let rootI = this.find(i), rootJ = this.find(j);
+        if (rootI != rootJ) { this.parent[rootI] = rootJ; this.count--; return true; }
+        return false;
+    }
+}
+
+function initGame() {
+    clearInterval(timerInterval);
+    stations = []; playerEdges = []; mstEdges = [];
+    timeLeft = 60; gameActive = true; selectedStation = null;
+    document.getElementById('submitBtn').disabled = false;
+    document.getElementById('message').innerText = "";
+    document.getElementById('currentWeight').innerText = "0";
+
+    let slots = [];
+    for(let i=1; i<18; i++) for(let j=1; j<8; j++) slots.push({x: i*GRID_SIZE, y: j*GRID_SIZE});
+    slots.sort(() => Math.random() - 0.5);
+    for(let i=0; i<8; i++) stations.push({...slots[i], id: i});
+
+    // Tính MST mục tiêu
+    let allPossible = [];
+    for(let i=0; i<stations.length; i++) {
+        for(let j=i+1; j<stations.length; j++) {
+            let d = Math.round(Math.hypot(stations[i].x-stations[j].x, stations[i].y-stations[j].y)/10);
+            allPossible.push({u: stations[i], v: stations[j], weight: d});
+        }
+    }
+    allPossible.sort((a,b) => a.weight - b.weight);
+    let dsu = new DSU(stations.length);
+    minPossibleWeight = 0;
+    allPossible.forEach(e => {
+        if(dsu.union(e.u.id, e.v.id)) {
+            mstEdges.push(e);
+            minPossibleWeight += e.weight;
+        }
+    });
+
+    timerInterval = setInterval(() => {
+        timeLeft--;
+        document.getElementById('timer').innerText = timeLeft;
+        if(timeLeft <= 0) submitGame();
+    }, 1000);
+    
+    requestAnimationFrame(gameLoop);
+}
+
+// Kiểm tra trạm có điện từ trạm gốc (id: 0)
+function isStationPowered(id) {
+    if (playerEdges.length === 0) return id === 0;
+    let dsu = new DSU(stations.length);
+    playerEdges.forEach(e => dsu.union(e.u.id, e.v.id));
+    return dsu.find(id) === dsu.find(0);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#020617"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    
+    // Vẽ Thành Phố & Đèn Nhà
+    for(let i=0; i<20; i++) {
+        for(let j=0; j<10; j++) {
+            let x = i*GRID_SIZE, y = j*GRID_SIZE;
+            if(i%2==0 || j%2==0) {
+                ctx.fillStyle = "#0f172a"; ctx.fillRect(x, y, GRID_SIZE, GRID_SIZE);
+            } else {
+                // Tòa nhà
+                ctx.fillStyle = "#1e293b";
+                ctx.fillRect(x+5, y+5, GRID_SIZE-10, GRID_SIZE-10);
+                
+                // Hiệu ứng đèn sáng dựa trên trạm gần nhất
+                let nearS = stations.find(s => Math.hypot(s.x-x, s.y-y) < GRID_SIZE*2);
+                if (nearS && isStationPowered(nearS.id)) {
+                    ctx.fillStyle = "#f1c40f"; // Đèn vàng
+                    ctx.shadowBlur = 8; ctx.shadowColor = "#f1c40f";
+                    ctx.fillRect(x+12, y+12, 6, 6);
+                    ctx.fillRect(x+GRID_SIZE-18, y+12, 6, 6);
+                    ctx.shadowBlur = 0;
+                } else {
+                    ctx.fillStyle = "#0f172a"; // Đèn tắt
+                    ctx.fillRect(x+12, y+12, 6, 6);
+                    ctx.fillRect(x+GRID_SIZE-18, y+12, 6, 6);
+                }
+            }
+        }
+    }
+
+    // Vẽ Cạnh (Dây điện)
+    playerEdges.forEach(e => {
+        ctx.beginPath();
+        ctx.moveTo(e.u.x, e.u.y); ctx.lineTo(e.v.x, e.v.y);
+        ctx.lineWidth = 4;
+        
+        if(e.isMissed) { ctx.strokeStyle = "#f1c40f"; ctx.setLineDash([8, 4]); }
+        else if(e.isWrong) { ctx.strokeStyle = "#e74c3c"; ctx.setLineDash([]); }
+        else if(e.isCorrect) { ctx.strokeStyle = "#2ecc71"; ctx.setLineDash([]); }
+        else { 
+            ctx.strokeStyle = (isStationPowered(e.u.id) || isStationPowered(e.v.id)) ? "#60a5fa" : "#475569";
+            ctx.setLineDash([]); 
+        }
+
+        ctx.shadowBlur = (e.isMissed || e.isWrong) ? 0 : 10;
+        ctx.shadowColor = ctx.strokeStyle;
+        ctx.stroke(); ctx.setLineDash([]); ctx.shadowBlur = 0;
+
+        ctx.fillStyle = "black"; ctx.fillRect((e.u.x+e.v.x)/2-12, (e.u.y+e.v.y)/2-8, 24, 16);
+        ctx.fillStyle = "white"; ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
+        ctx.fillText(e.weight, (e.u.x+e.v.x)/2, (e.u.y+e.v.y)/2+4);
+    });
+
+    // Vẽ Trạm
+    stations.forEach(s => {
+        let powered = isStationPowered(s.id);
+        ctx.fillStyle = (selectedStation && s.id === selectedStation.id) ? "white" : (powered ? "#f59e0b" : "#334155");
+        ctx.beginPath(); ctx.roundRect(s.x-15, s.y-15, 30, 30, 6); ctx.fill();
+        ctx.fillStyle = powered ? "black" : "#94a3b8";
+        ctx.font = "14px Arial"; ctx.fillText(s.id === 0 ? "🏠" : "⚡", s.x, s.y+5);
+    });
+}
+
+function gameLoop() { draw(); if(gameActive) requestAnimationFrame(gameLoop); }
+
+canvas.addEventListener('mousedown', e => {
+    if(!gameActive) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    let clicked = stations.find(s => Math.hypot(s.x-x, s.y-y) < 20);
+
+    if(clicked) {
+        if(!selectedStation) selectedStation = clicked;
+        else {
+            if(selectedStation.id !== clicked.id) {
+                let idx = playerEdges.findIndex(pe => (pe.u.id === selectedStation.id && pe.v.id === clicked.id) || (pe.v.id === selectedStation.id && pe.u.id === clicked.id));
+                if(idx === -1) {
+                    let d = Math.round(Math.hypot(selectedStation.x-clicked.x, selectedStation.y-clicked.y)/10);
+                    playerEdges.push({u: selectedStation, v: clicked, weight: d});
+                } else playerEdges.splice(idx, 1);
+            }
+            selectedStation = null;
+        }
+        document.getElementById('currentWeight').innerText = playerEdges.reduce((sum, e) => sum + e.weight, 0);
+    }
+});
+
+function submitGame() {
+    gameActive = false;
+    clearInterval(timerInterval);
+    document.getElementById('submitBtn').disabled = true;
+
+    let playerWeight = playerEdges.reduce((sum, e) => sum + e.weight, 0);
+    let dsu = new DSU(stations.length);
+    
+    playerEdges.forEach(pe => {
+        if (!dsu.union(pe.u.id, pe.v.id)) pe.isWrong = true;
+    });
+
+    let isConnected = (dsu.count === 1);
+    let msg = document.getElementById('message');
+
+    if (isConnected && playerWeight === minPossibleWeight && playerEdges.every(e => !e.isWrong)) {
+        playerEdges.forEach(e => e.isCorrect = true);
+        msg.innerText = "🌟 THÀNH PHỐ ĐÃ RỰC SÁNG TỐI ƯU!";
+        msg.style.color = "#2ecc71";
+    } else {
+        mstEdges.forEach(me => {
+            let exists = playerEdges.find(pe => (pe.u.id === me.u.id && pe.v.id === me.v.id) || (pe.v.id === me.u.id && me.u.id === me.v.id));
+            if(!exists) playerEdges.push({...me, isMissed: true});
+        });
+        msg.innerText = !isConnected ? "LỖI: CHƯA THÔNG ĐIỆN TOÀN THÀNH PHỐ!" : "LỖI: CHI PHÍ HOẶC CẤU TRÚC CHƯA TỐI ƯU!";
+        msg.style.color = "#e74c3c";
+    }
+    draw();
+}
+
+initGame();
+</script>
+</body>
+</html>
